@@ -1,126 +1,88 @@
-import React, { useMemo, useState } from 'react'
-import dayjs from 'dayjs'
-import {
-  Box, Grid, GridItem, Tabs, TabList, TabPanels, Tab, TabPanel,
-  HStack, Text
-} from '@chakra-ui/react'
+// 1. Import *useState* and *useEffect*
+import React, {useState, useEffect, useMemo} from 'react';
+import { Stack, HStack, VStack,Box,Grid,GridItem } from '@chakra-ui/react'
+import './App.css';
+import {preprocessData} from './filters.js'
+import MapView from './MapView.jsx';
+import Filter from './Filter.jsx';
+import dayjs from 'dayjs';
+function App() {
+    
+  let [data, setdata] = useState()
+  
 
-import Filters from './components/Filters.jsx'
-import MapView from './components/Mapview.jsx'
-import Trends from './components/Trends.jsx'
-import EventsTable from './components/EventsTable.jsx'
-
-import eventsJson from './data/events.json'
-import {
-  normalizeEvents, hourlySeries, zScoreSeries
-} from './utils/data.js'
-
-export default function App() {
-  // Normalize once
-  const all = normalizeEvents(eventsJson)
-
-  // Distinct facets for filters
-  const [types] = useState([...new Set(all.map(e => e.type))].sort())
-  const [deviceTypes] = useState([...new Set(all.map(e => e.deviceType).filter(Boolean))].sort())
-  const [regions] = useState([...new Set(all.map(e => e.region).filter(Boolean))].sort())
-
-  // Time window defaults to data min/max so you always see something
-  const minTs = Math.min(...all.map(e => e.ts))
-  const maxTs = Math.max(...all.map(e => e.ts))
-  const [start, setStart] = useState(new Date(minTs).toISOString())
-  const [end,   setEnd]   = useState(new Date(maxTs).toISOString())
+  useEffect(() => {
+    fetch("https://eonet.gsfc.nasa.gov/api/v3/events?category=wildfires&status=open&days=7")
+    .then(response => response.json())
+    .then(data => setdata(data))
+  },[])
+// console.log(data);
 
 
-  // Filters
-  const [selectedTypes, setSelectedTypes] = useState([])
-  const [selectedDeviceTypes, setSelectedDeviceTypes] = useState([])
-  const [selectedRegions, setSelectedRegions] = useState([])
-  const [tagQuery, setTagQuery] = useState('')
-  const [minSev, setMinSev] = useState(1)
-  const [maxSev, setMaxSev] = useState(5)
-  const [showHeatmap, setShowHeatmap] = useState(false)
+const events=preprocessData(data)
 
-  // Keep severity sliders ordered
-  const setMinSevClamped = (v) => {
-    const n = Math.max(1, Math.min(5, Number(v)))
-    setMinSev(n); if (n > maxSev) setMaxSev(n)
-  }
-  const setMaxSevClamped = (v) => {
-    const n = Math.max(1, Math.min(5, Number(v)))
-    setMaxSev(n); if (n < minSev) setMinSev(n)
-  }
+const minTs = Math.min(...events.map(e => e.ts))
+  const maxTs = Math.max(...events.map(e => e.ts))
+  const [startDate, setStartDate] = useState(null)
+const [endDate, setEndDate] = useState(null)
 
-  // Apply filters
-  const filtered = useMemo(() => {
-    const s = dayjs(start).valueOf()
-    const e = dayjs(end).valueOf()
-    const tq = tagQuery.trim().toLowerCase()
+const minMg = Math.min(...events.map(e => e.mag))
+  const maxMg = Math.max(...events.map(e => e.mag))
+const [minMag,setMinMag] = useState(minMg)
+  const [maxMag,setMaxMag] = useState(maxMg)
 
-    let out = all.filter(ev =>
-      ev.ts >= s && ev.ts <= e &&
-      ev.severity >= minSev && ev.severity <= maxSev &&
-      (selectedTypes.length === 0 || selectedTypes.includes(ev.type)) &&
-      (selectedDeviceTypes.length === 0 || selectedDeviceTypes.includes(ev.deviceType ?? '')) &&
-      (selectedRegions.length === 0 || selectedRegions.includes(ev.region ?? '')) &&
-      (tq === '' || (ev.tags || []).some(tag => tag.toLowerCase().includes(tq)))
-    )
 
-   
-    return out.slice(0, 2000)
-  }, [
-    all, start, end, minSev, maxSev, selectedTypes,
-    selectedDeviceTypes, selectedRegions, tagQuery
-  ])
+useEffect(() => {
+  if (!events?.length) return;
 
-  // Trends
-  const series = useMemo(
-    () => zScoreSeries(hourlySeries(filtered)),
-    [filtered]
-  )
+  const times = events.map(e => e.ts ?? e.time ?? e.date).map(t => +new Date(t)).filter(Number.isFinite);
+  if (!times.length) return;
+
+  const min = Math.min(...times), max = Math.max(...times);
+
+  // Only set the first time (or if still null). Won’t clobber user changes.
+  setStartDate(prev => prev ?? dayjs(min).startOf('day'));
+  setEndDate(prev   => prev ?? dayjs(max).endOf('day'));
+}, [events]);
+
+const filteredEvents = useMemo(() => {
+  // Build inclusive local-day boundaries
+  
+  const startMs = startDate ? dayjs(startDate).startOf("day").valueOf() : Number.NEGATIVE_INFINITY;
+  const endMs   = endDate   ? dayjs(endDate).endOf("day").valueOf()   : Number.POSITIVE_INFINITY;
+
+  return events.filter((event) => {
+    // Pick your time field; adjust if yours is event.iso/event.ts/etc.
+    const t = dayjs(event.date).valueOf();
+    if (!Number.isFinite(t)) return false;
+    return t >= startMs && t <= endMs;  // inclusive
+  });
+}, [events, startDate, endDate]);
 
   return (
-    <Grid templateColumns="280px 1fr" h="100vh">
-      {/* Sidebar */}
-      <GridItem borderRight="1px solid" borderColor="gray.200" p={3} overflow="auto">
-        <Text fontSize="lg" fontWeight="semibold" mb={2}>Filters</Text>
-        <Filters
-          start={start} end={end} setStart={setStart} setEnd={setEnd}
-          types={types} selectedTypes={selectedTypes} setSelectedTypes={setSelectedTypes}
-          deviceTypes={deviceTypes} selectedDeviceTypes={selectedDeviceTypes} setSelectedDeviceTypes={setSelectedDeviceTypes}
-          regions={regions} selectedRegions={selectedRegions} setSelectedRegions={setSelectedRegions}
-          tagQuery={tagQuery} setTagQuery={setTagQuery}
-          minSev={minSev} maxSev={maxSev} setMinSev={setMinSevClamped} setMaxSev={setMaxSevClamped}
-          showHeatmap={showHeatmap} setShowHeatmap={setShowHeatmap}
-          
-        />
+    <div className="App">
+      <h1>Wildfire Events in the Last 7 Days</h1>
+ <Grid
+  templateColumns={{ base: "1fr", md: "320px 1fr" }} // 320px sidebar on md+
+  gap={3}
+  h="100vh"
+>
+  <GridItem>
+    <Box p={4} h="100%" overflowY="auto">
+      <Filter startDate={startDate} endDate={endDate} setStartDate={setStartDate} setEndDate={setEndDate} minMag={minMag} maxMag={maxMag} setMinMag={setMinMag} setMaxMag={setMaxMag}></Filter>
+    </Box>
+  </GridItem>
 
-        <HStack mt={4} spacing={3}>
-          <Box borderWidth="1px" p={2} rounded="lg" textAlign="center" w="full">
-            <Text fontSize="xs" color="gray.500">Total</Text>
-            <Text fontWeight="semibold">{filtered.length}</Text>
-          </Box>
-          <Box borderWidth="1px" p={2} rounded="lg" textAlign="center" w="full">
-            <Text fontSize="xs" color="gray.500">Anomalies</Text>
-            <Text fontWeight="semibold">{series.filter(p => p.isAnomaly).length}</Text>
-          </Box>
-        </HStack>
-      </GridItem>
+  <GridItem>
+    <Box h="100%" minW={0}>
+      <MapView events={filteredEvents} />
+    </Box>
+  </GridItem>
+</Grid>
 
-      {/* Main */}
-      <GridItem minH={0} display="flex" flexDirection="column">
-        <Tabs display="flex" flexDirection="column" h="100%">
-          <TabList>
-            <Tab>Map</Tab>
-            <Tab>List ({filtered.length})</Tab>
-            <Tab>Trends</Tab>
-          </TabList>
-          <TabPanels flex="1" minH={0}>
-            <TabPanel p={0} h="100%"><Box h="100%"><MapView events={filtered} showHeatmap={showHeatmap} /></Box></TabPanel>
-            <TabPanel p={0} h="100%"><EventsTable events={filtered} /></TabPanel>
-            <TabPanel p={0}><Box h="360px"><Trends data={series} /></Box></TabPanel>
-          </TabPanels>
-        </Tabs>
-      </GridItem>
-    </Grid>
-  )
+
+    </div>
+  );
 }
+
+export default App;
